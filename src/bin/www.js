@@ -10,26 +10,25 @@ import db from '../../knex.config';
 
 const knex = require('knex')(db.option);
 
-const numCPUs = require('os').cpus().length;
-
 let start = 0;
 let end = 1;
-const step = 1000;
-const worker = [];
-const limit = 1000000;
+const step = 20;
+let worker;
+const limit = 4000;
 
 async function isPrimary() {
   if (cluster.isPrimary) {
+    const numCPUs = require('os').cpus().length;
     const links = await UrlsModel.getUrls(0, limit);
 
     for (let i = 0; i < numCPUs; i += 1) {
-      worker.push(cluster.fork());
+      worker = cluster.fork();
       start = step * i;
       end = start + step;
 
-      worker[i].send(links.slice(start, end));
+      worker.send(links.slice(start, end));
 
-      worker[i].on('message', async (msg) => {
+      worker.on('message', async (msg) => {
         const rejectedData = await knex
           .from('links')
           .whereIn('id', msg.data[0])
@@ -45,13 +44,19 @@ async function isPrimary() {
         console.log('Table update fulfilled', fulfilledData);
       });
 
-      worker[i].on('error', (error) => {
+      worker.on('error', (error) => {
         console.log(error);
       });
     }
 
-    cluster.on('exit', async () => {
-      worker[numCPUs - 1] = cluster.fork();
+    cluster.on('exit', async (worker) => {
+      console.log(`worker ${worker.process.pid} died.`);
+
+      if (start >= limit) {
+        return false;
+      }
+
+      worker = cluster.fork();
       start = end;
       end = start + step;
       let count = start + step - (step * numCPUs);
@@ -60,9 +65,10 @@ async function isPrimary() {
       if (count >= limit) {
         throw new Error('Good!! Your data has been checked!!');
       }
-      worker[numCPUs - 1].send(links.slice(start, end));
 
-      worker[numCPUs - 1].on('message', async (msg) => {
+      worker.send(links.slice(start, end));
+
+      worker.on('message', async (msg) => {
         const rejectedData = await knex
           .from('links')
           .whereIn('id', msg.data[0])
@@ -78,7 +84,7 @@ async function isPrimary() {
         console.log('Table update fulfilled', fulfilledData);
       });
 
-      worker[numCPUs - 1].on('error', (error) => {
+      worker.on('error', (error) => {
         console.log(error);
       });
     });
