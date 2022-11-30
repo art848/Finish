@@ -1,19 +1,13 @@
-// NPM Modules  
+// NPM Modules
 import PSQL from '../config/variables.config';
-import PSQLStorage from '../storage/psql.storage';
 
 const {
   PORT, HOST, DATABASE, USER, PASSWORD
 } = PSQL.PSQL;
-// import PSQLStorage from '../storage/psql.storage';
 
 class UrlsModel {
   // // Methods
-
   static async getUrls(offset, limit) {
-    // const knex = PSQLStorage
-    // console.log(knex);
-    // PSQLStorage.init()
     const knex = require('knex')({
       client: 'pg',
       useNullAsDefault: true,
@@ -31,10 +25,10 @@ class UrlsModel {
       .select('domain', 'id')
       .orderBy('id')
       .offset(offset)
-      .limit(limit)
-      .then((rows) => rows);
+      .limit(limit);
 
     return urls;
   }
 }
+
 export default UrlsModel;

@@ -8,7 +8,6 @@ import morgan from 'morgan';
 import config from './config/variables.config';
 import ErrorHandlerMiddleware from './middlewares/error-handler.middleware';
 import Api from './api';
-import PSQLStorage from './storage/psql.storage';
 
 const { CORS, DISABLE_REQUEST_LOG, PORT } = config;
 
@@ -30,10 +29,6 @@ class App {
     this._setRequestParser();
     this._initializeApi();
     this._setErrorHandler();
-  }
-
-  static _initializeStorage() {
-    return PSQLStorage.init();
   }
 
   /* @private

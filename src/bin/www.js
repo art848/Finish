@@ -1,106 +1,93 @@
 // Standard modules
-import http from 'http';
 import 'dotenv/config';
 import 'regenerator-runtime';
-import express from 'express';
 
 // Modules from this project
 import cluster from 'cluster';
-import { LoggerUtil } from '../utils';
-import App from '../app';
 import UrlService from '../services/UrlService';
 import { UrlsModel } from '../models';
-import UrlsController from '../controller/urls.controller';
-// Constants
-import config from '../config/variables.config';
-import { name } from '../../package.json';
-import { send } from 'process';
+import db from '../../knex.config';
 
-const { PORT } = config;
-// app.use(express).listen(PORT);
+const knex = require('knex')(db.option);
 
-const init = async () => {
-  const server = http.createServer(App.app);
+const numCPUs = require('os').cpus().length;
 
-  App.init();
-  const _onError = (error) => {
-    if (error.syscall !== 'listen') {
-      throw error;
-    }
-    const bind = typeof App.port === 'string' ? `Pipe ${App.port}` : `Port ${App.port}`;
-    switch (error.code) {
-      case 'EACCES':
-        LoggerUtil.error(`${bind} requires elevated privileges`);
-        process.exit(1);
-        break;
-      case 'EADDRINUSE':
-        LoggerUtil.error(`${bind} is already in use`);
-        process.exit(1);
-        break;
-      default:
-        throw error;
-    }
-  };
-  const _onListening = () => {
-    const address = server.address();
-    const bind = typeof address === 'string'
-      ? `pipe ${address}`
-      : `${address.port}`;
-
-    LoggerUtil.info(`${name} started:`);
-    LoggerUtil.info(`\tPort: ${bind}`);
-    LoggerUtil.info(`\tEnvironment: ${App.env}`);
-    LoggerUtil.info(`\tNode version: ${process.version}`);
-    LoggerUtil.info(`\tStart date: ${(new Date()).toUTCString()} \n`);
-  };
-  server.listen(PORT);
-  server.on('error', _onError);
-  server.on('listening', _onListening);
-};
-const total_cpus = require('os').cpus().length;
-let urls = []
-let element = [];
+let start = 0;
+let end = 1;
+const step = 1000;
+const worker = [];
+const limit = 1000000;
 
 async function isPrimary() {
-
   if (cluster.isPrimary) {
-    urls = await UrlsModel.getUrls(0,500);
-    // urls = await UrlsController.getAllUrls(1,20);
+    const links = await UrlsModel.getUrls(0, limit);
 
-    const worker = cluster.fork();
-    for (let i = 0; i < 7; i += 1) {
-      cluster.fork()
-    }
-      for (let step = 0; step < urls.length; step += 5) {
-        element = urls.slice(step, step + 5);
-        worker.send(element);
-      }
+    for (let i = 0; i < numCPUs; i += 1) {
+      worker.push(cluster.fork());
+      start = step * i;
+      end = start + step;
 
-      worker.on("message", (msg) => {
-        // check for data property
-        // on msg object
-        if (msg.data) {
-          let count = msg.data.length * urls.length/5;
-          console.log(count);
-        }
+      worker[i].send(links.slice(start, end));
+
+      worker[i].on('message', async (msg) => {
+        const rejectedData = await knex
+          .from('links')
+          .whereIn('id', msg.data[0])
+          .update({ status: 'passive' });
+
+        console.log('Table update rejected', rejectedData);
+
+        const fulfilledData = await knex
+          .from('links')
+          .whereIn('id', msg.data[1])
+          .update({ status: 'active' });
+
+        console.log('Table update fulfilled', fulfilledData);
       });
 
-    cluster.on('online', (worker) => {
-      console.log(`Worker ${worker.process.pid} is online.`);
+      worker[i].on('error', (error) => {
+        console.log(error);
+      });
+    }
+
+    cluster.on('exit', async () => {
+      worker[numCPUs - 1] = cluster.fork();
+      start = end;
+      end = start + step;
+      let count = start + step - (step * numCPUs);
+      console.log(count, ' => Has been checked!');
+
+      if (count >= limit) {
+        throw new Error('Good!! Your data has been checked!!');
+      }
+      worker[numCPUs - 1].send(links.slice(start, end));
+
+      worker[numCPUs - 1].on('message', async (msg) => {
+        const rejectedData = await knex
+          .from('links')
+          .whereIn('id', msg.data[0])
+          .update({ status: 'passive' });
+
+        console.log('Table update rejected', rejectedData);
+
+        const fulfilledData = await knex
+          .from('links')
+          .whereIn('id', msg.data[1])
+          .update({ status: 'active' });
+
+        console.log('Table update fulfilled', fulfilledData);
+      });
+
+      worker[numCPUs - 1].on('error', (error) => {
+        console.log(error);
+      });
     });
-
-
-    cluster.on('exit', (worker) => {
-      console.log(`worker ${worker.process.pid} died.`);
-      cluster.fork();
-    });
-
   } else {
-    process.on('message', async function (msg) {
-      // we only want to intercept messages that have a chat property
-      process.send({data : await UrlService.checkUrls(msg)});
+    process.on('message', async (msg) => {
+      process.send({ data: await UrlService.checkUrls(msg) });
+      process.kill(process.pid);
     });
   }
 }
-isPrimary();
 
+isPrimary();
