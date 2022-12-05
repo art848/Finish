@@ -10,83 +10,107 @@ import db from '../../knex.config';
 
 const knex = require('knex')(db.option);
 
+const numCPUs = require('os').cpus().length;
+
 let start = 0;
-let end = 1;
+let end = 0;
 const step = 20;
-let worker;
-const limit = 4000;
+let worker = [];
+const limit = 320;
 
 async function isPrimary() {
   if (cluster.isPrimary) {
-    const numCPUs = require('os').cpus().length;
     const links = await UrlsModel.getUrls(0, limit);
-
     for (let i = 0; i < numCPUs; i += 1) {
-      worker = cluster.fork();
+      worker.push(cluster.fork());
       start = step * i;
       end = start + step;
 
-      worker.send(links.slice(start, end));
+      worker[i].send(links.slice(start, end));
 
-      worker.on('message', async (msg) => {
-        const rejectedData = await knex
+      worker[i].on('message', async (msg) => {
+        console.log(msg);
+        const informationalResponses = await knex
           .from('links')
           .whereIn('id', msg.data[0])
-          .update({ status: 'passive' });
+          .update({ status: 'informationalResponses' });
 
-        console.log('Table update rejected', rejectedData);
+        console.log('Table updated', informationalResponses);
 
-        const fulfilledData = await knex
+        const successfulResponses = await knex
           .from('links')
           .whereIn('id', msg.data[1])
-          .update({ status: 'active' });
+          .update({ status: 'successfulResponses' });
 
-        console.log('Table update fulfilled', fulfilledData);
+        console.log('Table updated', successfulResponses);
+
+        const redirectionMessages = await knex
+          .from('links')
+          .whereIn('id', msg.data[2])
+          .update({ status: 'redirectionMessages' });
+
+        console.log('Table updated', redirectionMessages);
+
+        const clientErrorResponses = await knex
+          .from('links')
+          .whereIn('id', msg.data[3])
+          .update({ status: 'clientErrorResponses' });
+
+        console.log('Table updated', clientErrorResponses);
       });
 
-      worker.on('error', (error) => {
+      worker[i].on('error', (error) => {
         console.log(error);
       });
     }
 
-    cluster.on('exit', async (worker) => {
-      console.log(`worker ${worker.process.pid} died.`);
-
-      if (start >= limit) {
-        return false;
-      }
-
-      worker = cluster.fork();
+    cluster.on('exit', async (currWorker) => {
       start = end;
       end = start + step;
-      let count = start + step - (step * numCPUs);
-      console.log(count, ' => Has been checked!');
 
-      if (count >= limit) {
-        throw new Error('Good!! Your data has been checked!!');
+      if (end <= limit) {
+        worker = worker.filter((w) => w.id !== currWorker.id);
+
+        worker.push(cluster.fork());
+
+        const chunk = links.slice(start, end);
+        console.log('INIT start, end => ', start, end);
+        worker[numCPUs - 1].send(chunk);
+
+        worker[numCPUs - 1].on('message', async (msg) => {
+          const informationalResponses = await knex
+            .from('links')
+            .whereIn('id', msg.data[0])
+            .update({ status: 'informationalResponses' });
+
+          console.log('Table updated', informationalResponses);
+
+          const successfulResponses = await knex
+            .from('links')
+            .whereIn('id', msg.data[1])
+            .update({ status: 'successfulResponses' });
+
+          console.log('Table updated', successfulResponses);
+
+          const redirectionMessages = await knex
+            .from('links')
+            .whereIn('id', msg.data[2])
+            .update({ status: 'redirectionMessages' });
+
+          console.log('Table updated', redirectionMessages);
+
+          const clientErrorResponses = await knex
+            .from('links')
+            .whereIn('id', msg.data[3])
+            .update({ status: 'clientErrorResponses' });
+
+          console.log('Table updated', clientErrorResponses);
+        });
+
+        worker[numCPUs - 1].on('error', (error) => {
+          console.log(error);
+        });
       }
-
-      worker.send(links.slice(start, end));
-
-      worker.on('message', async (msg) => {
-        const rejectedData = await knex
-          .from('links')
-          .whereIn('id', msg.data[0])
-          .update({ status: 'passive' });
-
-        console.log('Table update rejected', rejectedData);
-
-        const fulfilledData = await knex
-          .from('links')
-          .whereIn('id', msg.data[1])
-          .update({ status: 'active' });
-
-        console.log('Table update fulfilled', fulfilledData);
-      });
-
-      worker.on('error', (error) => {
-        console.log(error);
-      });
     });
   } else {
     process.on('message', async (msg) => {
@@ -97,3 +121,4 @@ async function isPrimary() {
 }
 
 isPrimary();
+
